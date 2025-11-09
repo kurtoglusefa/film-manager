@@ -1,0 +1,500 @@
+openapi: 3.0.3
+info:
+  title: Film Manager API
+  version: "1.0.0"
+  description: REST APIs for the Film Manager platform (session-based authentication).
+
+servers:
+  - url: http://localhost:3001
+
+tags:
+  - name: auth
+  - name: films
+  - name: public
+  - name: reviews
+  - name: admin
+
+paths:
+  /api/sessions:
+    post:
+      tags: [auth]
+      summary: Login with email and password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 6, maxLength: 20 }
+      responses:
+        "200":
+          description: Authenticated; cookie connect.sid is set
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/sessions/current:
+    get:
+      tags: [auth]
+      summary: Get current authenticated user
+      security: [{ sessionAuth: [] }]
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    delete:
+      tags: [auth]
+      summary: Logout and destroy session
+      security: [{ sessionAuth: [] }]
+      responses:
+        "204":
+          description: Logged out
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # -------- PUBLIC FILMS --------
+  /api/films/public:
+    get:
+      tags: [public]
+      summary: List public films (paginated)
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Page of public films
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaginatedFilms" }
+
+  /api/films/public/{filmId}:
+    get:
+      tags: [public]
+      summary: Get a single public film
+      parameters:
+        - $ref: "#/components/parameters/FilmId"
+      responses:
+        "200":
+          description: A public film
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FilmPublic" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/films/public/{filmId}/reviews:
+    get:
+      tags: [public, reviews]
+      summary: List reviews of a public film
+      parameters:
+        - $ref: "#/components/parameters/FilmId"
+      responses:
+        "200":
+          description: Reviews for film
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ReviewCompletedOrPending" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/films/public/{filmId}/reviews/{reviewerId}:
+    get:
+      tags: [public, reviews]
+      summary: Get a single review of a public film
+      parameters:
+        - $ref: "#/components/parameters/FilmId"
+        - $ref: "#/components/parameters/ReviewerId"
+      responses:
+        "200":
+          description: Review invitation or completed review
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReviewCompletedOrPending" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # -------- AUTHENTICATED FILMS --------
+  /api/films/me:
+    get:
+      tags: [films]
+      summary: List films owned by current user (paginated)
+      security: [{ sessionAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+      responses:
+        "200":
+          description: Page of my films
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaginatedFilms" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/films/reviews/me:
+    get:
+      tags: [films, reviews]
+      summary: List films I am invited to review
+      security: [{ sessionAuth: [] }]
+      responses:
+        "200":
+          description: Films for which the user is a reviewer
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Film" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/films:
+    post:
+      tags: [films]
+      summary: Create a new film (owner becomes current user)
+      security: [{ sessionAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Film" }
+      responses:
+        "201":
+          description: Created
+          headers:
+            Location:
+              schema: { type: string }
+              description: Resource URL of the created film
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Film" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/films/{filmId}:
+    get:
+      tags: [films]
+      summary: Get a film if public or I am the owner
+      security: [{ sessionAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/FilmId"
+      responses:
+        "200":
+          description: Film
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Film" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [films]
+      summary: Update a film (owner only). Visibility cannot be toggled.
+      security: [{ sessionAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/FilmId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Film" }
+      responses:
+        "200":
+          description: Updated film
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Film" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [films]
+      summary: Delete a film (owner only)
+      security: [{ sessionAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/FilmId"
+      responses:
+        "204":
+          description: Deleted
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # -------- REVIEW INVITATIONS (AUTH) --------
+  /api/films/{filmId}/reviews:
+    post:
+      tags: [reviews]
+      summary: Owner invites a reviewer for a public film
+      security: [{ sessionAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/FilmId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reviewerId]
+              properties:
+                reviewerId: { type: integer }
+      responses:
+        "201":
+          description: Invitation created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReviewCompletedOrPending" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/films/{filmId}/reviews/{reviewerId}:
+    put:
+      tags: [reviews]
+      summary: Invited reviewer marks review as completed (and sets details)
+      security: [{ sessionAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/FilmId"
+        - $ref: "#/components/parameters/ReviewerId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReviewCompleted" }
+      responses:
+        "200":
+          description: Review updated to completed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReviewCompleted" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [reviews]
+      summary: Owner removes an invitation if not completed
+      security: [{ sessionAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/FilmId"
+        - $ref: "#/components/parameters/ReviewerId"
+      responses:
+        "204":
+          description: Invitation removed
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # -------- OPTIONAL ADMIN / AUTO-ASSIGN --------
+  /api/reviews/auto-assign:
+    post:
+      tags: [admin, reviews]
+      summary: Auto-assign invitations evenly for films without invitations
+      security: [{ sessionAuth: [] }]
+      responses:
+        "200":
+          description: Summary of created invitations
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: array
+                  items: { type: integer }
+                example:
+                  "42": [3, 5] # filmId 42 -> reviewer userIds
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+components:
+  securitySchemes:
+    sessionAuth:
+      type: apiKey
+      in: cookie
+      name: connect.sid
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      description: 1-based page index
+      required: false
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSize:
+      name: pageSize
+      in: query
+      description: Items per page
+      required: false
+      schema: { type: integer, minimum: 1, maximum: 100 }
+    FilmId:
+      name: filmId
+      in: path
+      required: true
+      schema: { type: integer }
+    ReviewerId:
+      name: reviewerId
+      in: path
+      required: true
+      schema: { type: integer }
+
+  responses:
+    Unauthorized:
+      description: Not authenticated
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: Not allowed
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    BadRequest:
+      description: Validation or input error
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Conflict:
+      description: Conflict (e.g., duplicate)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    # ---------- CORE DOMAIN ----------
+    User:
+      type: object
+      additionalProperties: false
+      required: [id, email]
+      properties:
+        id: { type: integer }
+        name: { type: string, minLength: 1 }
+        email: { type: string, format: email }
+        password: { type: string, minLength: 6, maxLength: 20 }
+        links:
+          type: object
+          properties:
+            self: { type: string, format: uri }
+    FilmBase:
+      type: object
+      additionalProperties: false
+      required: [id, title, owner, private]
+      properties:
+        id: { type: integer }
+        title: { type: string, minLength: 1 }
+        owner: { type: integer }
+        private: { type: boolean }
+        watchDate: { type: string, format: date }
+        rating: { type: integer, minimum: 0, maximum: 10 }
+        favorite: { type: boolean, default: false }
+        links:
+          type: object
+          properties:
+            self: { type: string, format: uri }
+            owner: { type: string, format: uri }
+            reviews: { type: string, format: uri }
+    # Private film allows optional extras
+    FilmPrivate:
+      allOf:
+        - $ref: "#/components/schemas/FilmBase"
+        - type: object
+          properties:
+            private: { type: boolean, enum: [true] }
+    # Public film forbids extras
+    FilmPublic:
+      allOf:
+        - $ref: "#/components/schemas/FilmBase"
+        - type: object
+          properties:
+            private: { type: boolean, enum: [false] }
+          not:
+            anyOf:
+              - required: [watchDate]
+              - required: [rating]
+              - required: [favorite]
+    # Accept either, while enforcing "no extras when public"
+    Film:
+      oneOf:
+        - $ref: "#/components/schemas/FilmPrivate"
+        - $ref: "#/components/schemas/FilmPublic"
+
+    # Reviews (invitation vs completed)
+    ReviewBase:
+      type: object
+      additionalProperties: false
+      required: [filmId, reviewerId, completed]
+      properties:
+        filmId: { type: integer }
+        reviewerId: { type: integer }
+        completed: { type: boolean }
+        reviewDate: { type: string, format: date }
+        rating: { type: integer, minimum: 0, maximum: 10 }
+        review: { type: string, maxLength: 1000 }
+        links:
+          type: object
+          properties:
+            self: { type: string, format: uri }
+            film: { type: string, format: uri }
+            reviewer: { type: string, format: uri }
+
+    ReviewCompleted:
+      allOf:
+        - $ref: "#/components/schemas/ReviewBase"
+        - type: object
+          properties:
+            completed: { type: boolean, enum: [true] }
+          required: [reviewDate, rating, review]
+
+    ReviewPending:
+      allOf:
+        - $ref: "#/components/schemas/ReviewBase"
+        - type: object
+          properties:
+            completed: { type: boolean, enum: [false] }
+          not:
+            anyOf:
+              - required: [reviewDate]
+              - required: [rating]
+              - required: [review]
+
+    ReviewCompletedOrPending:
+      oneOf:
+        - $ref: "#/components/schemas/ReviewCompleted"
+        - $ref: "#/components/schemas/ReviewPending"
+
+    # Pagination wrapper with HATEOAS links
+    PaginatedFilms:
+      type: object
+      required: [items, page, pageSize, totalItems, links]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Film" }
+        page: { type: integer, minimum: 1 }
+        pageSize: { type: integer, minimum: 1 }
+        totalItems: { type: integer, minimum: 0 }
+        links:
+          type: object
+          properties:
+            self: { type: string, format: uri }
+            first: { type: string, format: uri }
+            prev: { type: string, format: uri, nullable: true }
+            next: { type: string, format: uri, nullable: true }
+            last: { type: string, format: uri }
+
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+        details:
+          type: array
+          items: { type: string }

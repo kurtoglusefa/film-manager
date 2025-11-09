@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.org/schemas/film.schema.json",
+  "title": "Film",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "integer" },
+    "title": { "type": "string", "minLength": 1 },
+    "owner": { "type": "integer" },
+    "private": { "type": "boolean" },
+    "watchDate": { "type": "string", "format": "date" },
+    "rating": { "type": "integer", "minimum": 0, "maximum": 10 },
+    "favorite": { "type": "boolean", "default": false }
+  },
+  "required": ["id", "title", "owner", "private"],
+
+  "allOf": [
+    {
+      "if": { "properties": { "private": { "const": true } }, "required": ["private"] },
+      "then": {
+        "properties": {
+          "watchDate": { "type": "string", "format": "date" },
+          "rating": { "type": "integer", "minimum": 0, "maximum": 10 },
+          "favorite": { "type": "boolean", "default": false }
+        }
+      },
+      "else": {
+        "not": {
+          "anyOf": [
+            { "required": ["watchDate"] },
+            { "required": ["rating"] },
+            { "required": ["favorite"] }
+          ]
+        }
+      }
+    }
+  ]
+}

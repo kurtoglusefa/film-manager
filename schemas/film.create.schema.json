@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.org/schemas/film.create.schema.json",
+  "title": "FilmCreate",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "title": { "type": "string", "minLength": 1 },
+    "private": { "type": "boolean" },
+    "watchDate": { "type": "string", "format": "date" },
+    "rating": { "type": "integer", "minimum": 0, "maximum": 10 },
+    "favorite": { "type": "boolean", "default": false }
+  },
+  "required": ["title", "private"],
+  "allOf": [
+    {
+      "if": { "properties": { "private": { "const": true } }, "required": ["private"] },
+      "then": {},
+      "else": {
+        "not": {
+          "anyOf": [
+            { "required": ["watchDate"] },
+            { "required": ["rating"] },
+            { "required": ["favorite"] }
+          ]
+        }
+      }
+    }
+  ]
+}
