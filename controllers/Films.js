@@ -1,139 +1,34 @@
 'use strict';
 
 const utils = require('../utils/writer.js');
-const Films = require('../service/FilmsService');
+const FilmsService = require('../service/FilmsService');
 
-/**
- * Helpers
- */
-const toInt = (v) => {
-  const n = parseInt(v, 10);
-  return Number.isNaN(n) ? undefined : n;
+// Helper for consistent error responses
+const handleError = (res, err) => {
+  const msg = typeof err === 'string' ? err : err.message || 'Internal error';
+  const code =
+    msg.includes('NO_FILMS') ? 404 :
+      msg.includes('USER_NOT_OWNER') ? 403 :
+        msg.includes('NO_PUBLIC_FILM') ? 404 :
+          msg.includes('NO_PRIVATE_FILM') ? 404 :
+            msg.includes('validation') ? 400 :
+              500;
+  return utils.writeJson(res, { error: msg }, code);
 };
 
 /**
- * DELETE /api/films/{filmId}
- * Owner only (service enforces)
- */
-module.exports.apiFilmsFilmIdDELETE = async function apiFilmsFilmIdDELETE(req, res, next, filmId) {
-  try {
-    const id = toInt(filmId);
-    if (id === undefined) return utils.writeJson(res, { error: 'Invalid filmId' }, 400);
-
-    await Films.apiFilmsFilmIdDELETE(id, req.user?.id);
-    return utils.writeJson(res, null, 204);
-  } catch (err) {
-    const msg = (typeof err === 'string') ? err : (err?.message || 'Internal error');
-    const code =
-      msg.includes('Not authenticated') ? 401 :
-        msg.includes('Not authorized') || msg.includes('Forbidden') ? 403 :
-          msg.includes('not found') ? 404 :
-            500;
-    return utils.writeJson(res, { error: msg }, code);
-  }
-};
-
-/**
- * GET /api/films/{filmId}
- * If public or owner (service enforces)
- */
-module.exports.apiFilmsFilmIdGET = async function apiFilmsFilmIdGET(req, res, next, filmId) {
-  try {
-    const id = toInt(filmId);
-    if (id === undefined) return utils.writeJson(res, { error: 'Invalid filmId' }, 400);
-
-    const film = await Films.apiFilmsFilmIdGET(id, req.user?.id);
-    return utils.writeJson(res, film, 200);
-  } catch (err) {
-    const msg = (typeof err === 'string') ? err : (err?.message || 'Internal error');
-    const code =
-      msg.includes('Not authenticated') ? 401 :
-        msg.includes('Not authorized') ? 403 :
-          msg.includes('not found') ? 404 :
-            500;
-    return utils.writeJson(res, { error: msg }, code);
-  }
-};
-
-/**
- * PUT /api/films/{filmId}
- * Body must match path id; owner only; visibility flip should be rejected (service validates)
- */
-module.exports.apiFilmsFilmIdPUT = async function apiFilmsFilmIdPUT(req, res, next, body, filmId) {
-  try {
-    const id = toInt(filmId);
-    if (id === undefined) return utils.writeJson(res, { error: 'Invalid filmId' }, 400);
-
-    // Enforce path/body id coherence; if body lacks id, set it.
-    if (body && body.id !== undefined && body.id !== id)
-      return utils.writeJson(res, { error: 'Body id does not match path filmId' }, 400);
-    body = body || {};
-    body.id = id;
-
-    // Never trust owner in body; bind to authenticated user
-    if (!req.user?.id) return utils.writeJson(res, { error: 'Not authenticated' }, 401);
-    body.owner = req.user.id;
-
-    const updated = await Films.apiFilmsFilmIdPUT(body, id, req.user.id);
-    return utils.writeJson(res, updated, 200);
-  } catch (err) {
-    const msg = (typeof err === 'string') ? err : (err?.message || 'Internal error');
-    const code =
-      msg.includes('Not authenticated') ? 401 :
-        msg.includes('Not authorized') ? 403 :
-          msg.includes('cannot change visibility') ? 400 :
-            msg.includes('not found') ? 404 :
-              msg.includes('conflict') ? 409 :
-                400; // default to 400 for validation issues
-    return utils.writeJson(res, { error: msg }, code);
-  }
-};
-
-/**
- * GET /api/films/me?page=&pageSize=
+ * GET /api/films/me
+ * Get all films owned by the logged-in user (private ones)
  */
 module.exports.apiFilmsMeGET = async function apiFilmsMeGET(req, res, next, page, pageSize) {
   try {
     if (!req.user?.id) return utils.writeJson(res, { error: 'Not authenticated' }, 401);
 
-    const p = toInt(page) || 1;
-    const ps = toInt(pageSize); // undefined -> use default in service/utils
-    const result = await Films.apiFilmsMeGET(req.user.id, p, ps);
-    return utils.writeJson(res, result, 200);
+    const list = await FilmsService.getPrivateFilms(req.user.id, page);
+    const total = await FilmsService.getPrivateFilmsTotal(req.user.id);
+    return utils.writeJson(res, { total, items: list }, 200);
   } catch (err) {
-    const msg = (typeof err === 'string') ? err : (err?.message || 'Internal error');
-    const code = msg.includes('Not authenticated') ? 401 : 500;
-    return utils.writeJson(res, { error: msg }, code);
-  }
-};
-
-/**
- * POST /api/films
- * Create film; owner is current user (ignore/override body.owner)
- */
-module.exports.apiFilmsPOST = async function apiFilmsPOST(req, res, next, body) {
-  try {
-    if (!req.user?.id) return utils.writeJson(res, { error: 'Not authenticated' }, 401);
-
-    body = body || {};
-    body.owner = req.user.id; // bind to current user, prevent spoofing
-
-    const created = await Films.apiFilmsPOST(body, req.user.id);
-
-    // If service returns the created film with id, set Location
-    if (created && created.id !== undefined) {
-      res.setHeader('Location', `${created.self || `/api/films/${created.id}`}`);
-      return utils.writeJson(res, created, 201);
-    }
-    return utils.writeJson(res, created, 201);
-  } catch (err) {
-    const msg = (typeof err === 'string') ? err : (err?.message || 'Internal error');
-    const code =
-      msg.includes('validation') ? 400 :
-        msg.includes('duplicate') || msg.includes('exists') ? 409 :
-          msg.includes('Not authenticated') ? 401 :
-            400;
-    return utils.writeJson(res, { error: msg }, code);
+    handleError(res, err);
   }
 };
 
@@ -144,12 +39,93 @@ module.exports.apiFilmsPOST = async function apiFilmsPOST(req, res, next, body) 
 module.exports.apiFilmsReviewsMeGET = async function apiFilmsReviewsMeGET(req, res, next) {
   try {
     if (!req.user?.id) return utils.writeJson(res, { error: 'Not authenticated' }, 401);
-
-    const list = await Films.apiFilmsReviewsMeGET(req.user.id);
-    return utils.writeJson(res, list, 200);
+    const list = await FilmsService.getInvitedFilms(req.user.id, 1);
+    const total = await FilmsService.getInvitedFilmsTotal(req.user.id);
+    return utils.writeJson(res, { total, items: list }, 200);
   } catch (err) {
-    const msg = (typeof err === 'string') ? err : (err?.message || 'Internal error');
-    const code = msg.includes('Not authenticated') ? 401 : 500;
-    return utils.writeJson(res, { error: msg }, code);
+    handleError(res, err);
+  }
+};
+
+/**
+ * POST /api/films
+ * Create new film (owner = current user)
+ */
+module.exports.apiFilmsPOST = async function apiFilmsPOST(req, res, next, body) {
+  try {
+    if (!req.user?.id) return utils.writeJson(res, { error: 'Not authenticated' }, 401);
+    const film = await FilmsService.createFilm(body, req.user.id);
+    res.setHeader('Location', `/api/films/${film.id}`);
+    return utils.writeJson(res, film, 201);
+  } catch (err) {
+    handleError(res, err);
+  }
+};
+
+/**
+ * GET /api/films/:filmId
+ * Retrieve single film (public or owner)
+ */
+module.exports.apiFilmsFilmIdGET = async function apiFilmsFilmIdGET(req, res, next, filmId) {
+  try {
+    if (!req.user?.id) return utils.writeJson(res, { error: 'Not authenticated' }, 401);
+
+    // Try private first, then public
+    try {
+      const film = await FilmsService.getSinglePrivateFilm(filmId, req.user.id);
+      return utils.writeJson(res, film, 200);
+    } catch (err1) {
+      const film = await FilmsService.getSinglePublicFilm(filmId);
+      return utils.writeJson(res, film, 200);
+    }
+  } catch (err) {
+    handleError(res, err);
+  }
+};
+
+/**
+ * PUT /api/films/:filmId
+ * Update existing film (owner only)
+ */
+module.exports.apiFilmsFilmIdPUT = async function apiFilmsFilmIdPUT(req, res, next, body, filmId) {
+  try {
+    if (!req.user?.id) return utils.writeJson(res, { error: 'Not authenticated' }, 401);
+    const id = parseInt(filmId);
+    body.id = id;
+
+    // Determine private/public based on body/private flag
+    if (body.private) {
+      await FilmsService.updateSinglePrivateFilm(body, id, req.user.id);
+    } else {
+      await FilmsService.updateSinglePublicFilm(body, id, req.user.id);
+    }
+
+    return utils.writeJson(res, { message: 'Updated' }, 200);
+  } catch (err) {
+    handleError(res, err);
+  }
+};
+
+/**
+ * DELETE /api/films/:filmId
+ * Delete film (owner only)
+ */
+module.exports.apiFilmsFilmIdDELETE = async function apiFilmsFilmIdDELETE(req, res, next, filmId) {
+  try {
+    if (!req.user?.id) return utils.writeJson(res, { error: 'Not authenticated' }, 401);
+    const id = parseInt(filmId);
+
+    // Check type before delete
+    const film = await FilmsService.getSinglePublicFilm(id)
+      .catch(() => null);
+
+    if (film && film.private === false)
+      await FilmsService.deleteSinglePublicFilm(id, req.user.id);
+    else
+      await FilmsService.deleteSinglePrivateFilm(id, req.user.id);
+
+    return utils.writeJson(res, null, 204);
+  } catch (err) {
+    handleError(res, err);
   }
 };

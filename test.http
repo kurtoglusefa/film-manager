@@ -1,132 +1,133 @@
-###  Film Manager REST API Manual Tests
-###  Server: http://localhost:3001
-###  Cookies: VS Code REST Client keeps connect.sid automatically after login
-
+### Film Manager REST API Manual Tests (owner-only, no DB changes)
 @baseUrl = http://localhost:3001
 @userEmail = user.dsp@polito.it
 @userPassword = password
-@samplePublicFilmId = 2
-@sampleReviewerId = 2
-@newFilmId = 999
+
+# Fill these after running the earlier requests:
+@myUserId = 0          # set from GET /api/sessions/current
+@publicFilmId = 19      # set from the PUBLIC create response
+@privateFilmId = 0     # set from the PRIVATE create response
 
 
-####################################################################
-# 1) Authentication
-####################################################################
+# 0) Auth (owner)
 
-### Login
+### Login (owner)
+# @name loginOwner
 POST {{baseUrl}}/api/sessions
 Content-Type: application/json
 
 {
-  "email": "frank.stein@polito.it",
-  "password": "shelley97"
+  "email": "{{userEmail}}",
+  "password": "{{userPassword}}"
 }
 
-### Get current authenticated user
+### Who am I (owner) — copy the "id" here into @myUserId above
 GET {{baseUrl}}/api/sessions/current
 
-### Logout
-DELETE {{baseUrl}}/api/sessions/current
 
 
+# 1) Public film happy path (owner invites THEMSELVES and completes)
 
-####################################################################
-# 2) Public Films (no auth required)
-####################################################################
-
-### List public films (paginated)
-GET {{baseUrl}}/api/films/public?page=1&pageSize=5
-
-### Get a single public film
-GET {{baseUrl}}/api/films/public/{{samplePublicFilmId}}
-
-### Get all reviews of a public film
-GET {{baseUrl}}/api/films/public/{{samplePublicFilmId}}/reviews
-
-### Get specific review of a public film
-GET {{baseUrl}}/api/films/public/{{samplePublicFilmId}}/reviews/{{sampleReviewerId}}
-
-
-
-####################################################################
-# 3) My Films (requires login)
-####################################################################
-
-### Get my films
-GET {{baseUrl}}/api/films/me?page=1&pageSize=5
-
-### Create a new film (no id/owner in body)
+### Create a PUBLIC film (no watchDate/rating/favorite for public)
 POST {{baseUrl}}/api/films
 Content-Type: application/json
 
 {
-  "title": "The Matrix Reloaded",
-  "private": true,
-  "watchDate": "2025-11-08",
-  "rating": 9,
-  "favorite": true
+  "title": "Public Demo",
+  "private": false
 }
 
-### Retrieve the newly created film (replace with actual id if different)
-GET {{baseUrl}}/api/films/{{newFilmId}}
+# After this returns 201, copy its "id" into @publicFilmId at the top.
 
-### Update the film (id must match path)
-PUT {{baseUrl}}/api/films/{{newFilmId}}
+### Verify it’s visible via public endpoint
+GET {{baseUrl}}/api/films/public/{{publicFilmId}}
+
+### Invite MYSELF (owner) to review this public film
+POST {{baseUrl}}/api/films/{{publicFilmId}}/reviews
 Content-Type: application/json
 
 {
-  "id": {{newFilmId}},
-  "title": "The Matrix Revolutions",
-  "private": true,
-  "watchDate": "2025-11-09",
-  "rating": 8,
-  "favorite": false
+  "reviewerId": {{myUserId}}
 }
 
-### Delete the film
-DELETE {{baseUrl}}/api/films/{{newFilmId}}
+### See all reviews for that public film (should include a pending one)
+GET {{baseUrl}}/api/films/public/{{publicFilmId}}/reviews
 
-
-
-####################################################################
-# 4) Review Invitations (Owner actions; requires login)
-####################################################################
-
-### Invite reviewer to a public film (use one you own & is public)
-POST {{baseUrl}}/api/films/{{samplePublicFilmId}}/reviews
-Content-Type: application/json
-
-{
-  "reviewerId": {{sampleReviewerId}}
-}
-
-### Delete invitation (only if not completed)
-DELETE {{baseUrl}}/api/films/{{samplePublicFilmId}}/reviews/{{sampleReviewerId}}
-
-### Reviewer completes review (this endpoint requires the invited reviewer logged in)
-PUT {{baseUrl}}/api/films/{{samplePublicFilmId}}/reviews/{{sampleReviewerId}}
+### Complete the review AS MYSELF (same session)
+PUT {{baseUrl}}/api/films/{{publicFilmId}}/reviews/{{myUserId}}
 Content-Type: application/json
 
 {
   "completed": true,
   "reviewDate": "2025-11-09",
   "rating": 8,
-  "review": "Great cinematography and score."
+  "review": "Owner self-review demo."
 }
 
+### Now the single review is completed
+GET {{baseUrl}}/api/films/public/{{publicFilmId}}/reviews/{{myUserId}}
 
-
-####################################################################
-# 5) Films I’m invited to review (requires login as the reviewer)
-####################################################################
-
+### (Optional) Films I’m invited to review (should include the film now)
 GET {{baseUrl}}/api/films/reviews/me
 
+### Clean up: delete the public film (owner can; service removes reviews first)
+DELETE {{baseUrl}}/api/films/{{publicFilmId}}
+
 
 
 ####################################################################
-# 6) Optional admin: auto-assign (requires auth; adjust service/rights)
+# 2) Private film CRUD (owner)
 ####################################################################
 
-POST {{baseUrl}}/api/reviews/auto-assign
+### Create a PRIVATE film
+POST {{baseUrl}}/api/films
+Content-Type: application/json
+
+{
+  "title": "Private Demo",
+  "private": true,
+  "watchDate": "2025-11-08",
+  "rating": 9,
+  "favorite": true
+}
+
+# After this returns 201, copy its "id" into @privateFilmId at the top.
+
+### Retrieve my private film via authenticated endpoint
+GET {{baseUrl}}/api/films/{{privateFilmId}}
+
+### Update the private film
+PUT {{baseUrl}}/api/films/{{privateFilmId}}
+Content-Type: application/json
+
+{
+  "id": {{privateFilmId}},
+  "title": "Private Demo (Edited)",
+  "private": true,
+  "watchDate": "2025-11-09",
+  "rating": 7,
+  "favorite": false
+}
+
+### Get my private films (paginated)
+GET {{baseUrl}}/api/films/me?page=1&pageSize=5
+
+### Delete the private film
+DELETE {{baseUrl}}/api/films/{{privateFilmId}}
+
+
+
+####################################################################
+# 3) Public catalogue (for sanity)
+####################################################################
+
+### List public films (paginated)
+GET {{baseUrl}}/api/films/public?page=1&pageSize=5
+
+
+
+####################################################################
+# 4) Logout
+####################################################################
+
+DELETE {{baseUrl}}/api/sessions/current
