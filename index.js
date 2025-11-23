@@ -10,6 +10,9 @@ const { Validator, ValidationError } = require('express-json-validator-middlewar
 const session = require('express-session');
 const passport = require('passport'); // strategies registered by ./passport-config
 require('./passport-config');         // sets up LocalStrategy + (de)serialize
+const storage = require('./storage');
+const imageController = require('./controllers/Image');
+
 
 const serverPort = 3001;
 
@@ -250,6 +253,38 @@ app.use((err, req, res, next) => {
   }
   next(err);
 });
+
+/** IMAGE ROUTES (auth required) */
+
+// upload a new image to a public film (owner only)
+app.post(
+  '/api/films/public/:filmId/images',
+  isLoggedIn,
+  storage.uploadImg,
+  (req, res, next) => imageController.addImage(req, res, next, req.params.filmId)
+);
+
+// list images of public film (owner or reviewer)
+app.get(
+  '/api/films/public/:filmId/images',
+  isLoggedIn,
+  (req, res, next) => imageController.listImages(req, res, next, req.params.filmId)
+);
+
+// get single image (JSON or file, depending on Accept)
+app.get(
+  '/api/films/public/:filmId/images/:imageId',
+  isLoggedIn,
+  (req, res, next) => imageController.getImage(req, res, next, req.params.filmId, req.params.imageId)
+);
+
+// delete image (owner only)
+app.delete(
+  '/api/films/public/:filmId/images/:imageId',
+  isLoggedIn,
+  (req, res, next) => imageController.deleteImage(req, res, next, req.params.filmId, req.params.imageId)
+);
+
 
 /* --------------------------------- Server ---------------------------------- */
 http.createServer(app).listen(serverPort, function () {

@@ -1,0 +1,11 @@
+{
+    "sqltools.connections": [
+        {
+            "previewLimit": 50,
+            "driver": "SQLite",
+            "name": "fm-db",
+            "database": "${workspaceFolder:film-manager}/database/databaseV1.db"
+        }
+    ],
+    "sqltools.useNodeRuntime": true
+}

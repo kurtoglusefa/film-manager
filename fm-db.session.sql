@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS images (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  filmId    INTEGER NOT NULL,
+  filename  TEXT    NOT NULL,
+  mediaType TEXT    NOT NULL,
+  FOREIGN KEY (filmId) REFERENCES films(id)
+);
