@@ -74,10 +74,7 @@ GET {{baseUrl}}/api/films/reviews/me
 DELETE {{baseUrl}}/api/films/{{publicFilmId}}
 
 
-
-####################################################################
 # 2) Private film CRUD (owner)
-####################################################################
 
 ### Create a PRIVATE film
 POST {{baseUrl}}/api/films
@@ -116,18 +113,59 @@ GET {{baseUrl}}/api/films/me?page=1&pageSize=5
 DELETE {{baseUrl}}/api/films/{{privateFilmId}}
 
 
-
-####################################################################
-# 3) Public catalogue (for sanity)
-####################################################################
+# 3) Public catalogue
 
 ### List public films (paginated)
 GET {{baseUrl}}/api/films/public?page=1&pageSize=5
 
 
-
-####################################################################
 # 4) Logout
-####################################################################
 
 DELETE {{baseUrl}}/api/sessions/current
+
+
+
+####################################################################
+# Images (REST + gRPC)
+####################################################################
+
+### Create a PUBLIC film to attach images to
+# # @name createImageFilm
+# POST {{baseUrl}}/api/films
+# Content-Type: application/json
+
+# {
+#   "title": "Image Demo Film",
+#   "private": false
+# }
+
+# @imageFilmId = {{createImageFilm.response.body.id}}
+
+# ### Upload a JPEG image for that film (owner)
+# ### NOTE: adjust file path ./test-images/poster.jpg to an existing file on disk
+# POST {{baseUrl}}/api/films/public/{{imageFilmId}}/images
+# Content-Type: multipart/form-data; boundary=MyBoundary
+
+# --MyBoundary
+# Content-Disposition: form-data; name="image"; filename="poster.jpg"
+# Content-Type: image/jpeg
+
+# < ./test-images/poster.jpg
+# --MyBoundary--
+
+# ### List images for that film (owner or reviewer)
+# GET {{baseUrl}}/api/films/public/{{imageFilmId}}/images
+
+# ### Get image metadata (JSON) for the first image in the list
+# # @name getFirstImageMeta
+# GET {{baseUrl}}/api/films/public/{{imageFilmId}}/images/1
+# Accept: application/json
+
+# @imageId = {{getFirstImageMeta.response.body.id}}
+
+# ### Get the same image as PNG (this may trigger gRPC conversion)
+# GET {{baseUrl}}/api/films/public/{{imageFilmId}}/images/{{imageId}}
+# Accept: image/png
+
+# ### Delete the image (owner only)
+# DELETE {{baseUrl}}/api/films/public/{{imageFilmId}}/images/{{imageId}}
