@@ -53,8 +53,6 @@ exports.getImage = function (req, res, next, filmId, imageId) {
             } else {
                 res.status(200);
                 res.setHeader('Content-Type', result.contentType);
-
-                // IMPORTANT FIX: DO NOT use { root: '/' }
                 res.sendFile(result.filePath, (err) => {
                     if (err) {
                         console.error('sendFile error:', err);

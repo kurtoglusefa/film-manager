@@ -20,11 +20,43 @@ const serverPort = 3001;
 const expressAppConfig = oas3Tools.expressAppConfig(path.join(__dirname, 'api/openapi.yaml'));
 const app = expressAppConfig.getApp();
 
+
+
+
+
 /* ------------------------------- Middlewares ------------------------------- */
+// app.use(cors({
+//   origin: 'http://localhost:5173',
+//   credentials: true,
+// }));
+
 app.use(cors({
-  origin: 'http://localhost:3000',
+  origin: (origin, callback) => {
+    // allow requests from any origin (good enough for the lab)
+    callback(null, true);
+  },
   credentials: true,
 }));
+
+app.set('etag', false);
+
+app.get('/api', (req, res) => {
+  // explicitly set CORS headers (in addition to the global middleware)
+  res.setHeader('Access-Control-Allow-Origin', req.headers.origin || 'http://localhost:5173');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+
+  res.json({
+    name: 'Film Manager',
+    baseUrl: 'http://localhost:3001',
+    docs: '/docs',
+    privateFilms: '/api/films/me',
+    publicFilms: '/api/films/public',
+    invitedPublicFilms: '/api/films/reviews/me',
+    films: '/api/films',
+    usersAuthenticator: '/api/sessions',
+    users: '/api/users'
+  });
+});
 
 app.use(session({
   secret: "shhhhh... it's a secret!",  // replace in real deployments
@@ -241,6 +273,52 @@ app.delete(
   (req, res, next) => ReviewCtl.apiFilmsFilmIdReviewsReviewerIdDELETE(req, res, next, req.params.filmId, req.params.reviewerId)
 );
 
+/** FILM SELECTION (AUTH REQUIRED) */
+app.put('/api/users/:userId/selection', isLoggedIn, async (req, res) => {
+  try {
+    const userId = parseInt(req.params.userId);
+    if (userId !== req.user.id)
+      return res.status(403).json({ error: 'USER_NOT_AUTHORIZED' });
+
+    const { filmId } = req.body;
+    if (!filmId)
+      return res.status(400).json({ error: 'NO_FILMID_PROVIDED' });
+
+    // 1) Check permission using reviews + public film
+    const allowed = await storage.checkUserReviewPermission(userId, filmId);
+    if (!allowed)
+      return res.status(403).json({ error: 'NO_REVIEW_REQUEST_FOR_USER' });
+
+    // 2) Update DB active film (clear previous, set new)
+    await storage.setActiveFilm(userId, filmId);
+
+    // 3) Get title for broadcast
+    const film = await storage.getFilmById(filmId);
+    if (!film)
+      return res.status(404).json({ error: 'FILM_NOT_FOUND' });
+
+    // 4) Respond to caller
+    res.status(200).json({
+      userId,
+      filmId,
+      filmTitle: film.title,
+    });
+
+    // 5) Notify all WS clients (this will also update onlineUsers map)
+    global.wssBroadcast({
+      typeMessage: 'update',
+      userId,
+      userName: req.user.name,
+      filmId,
+      filmTitle: film.title,
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'SERVER_ERROR' });
+  }
+});
+
 /** OPTIONAL ADMIN */
 app.post('/api/reviews/auto-assign', isLoggedIn, (req, res, next) =>
   AdminCtl.apiReviewsAuto_assignPOST(req, res, next)
@@ -291,3 +369,7 @@ http.createServer(app).listen(serverPort, function () {
   console.log('Your server is listening on port %d (http://localhost:%d)', serverPort, serverPort);
   console.log('Swagger-ui is available on http://localhost:%d/docs', serverPort);
 });
+
+/* ---------------------------- WebSocket server ----------------------------- */
+require('./wsServer');
+
