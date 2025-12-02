@@ -1,7 +1,6 @@
 'use strict';
 
 const addFormats = require('ajv-formats');
-
 const path = require('path');
 const http = require('http');
 const cors = require('cors');
@@ -12,15 +11,41 @@ const passport = require('passport'); // strategies registered by ./passport-con
 require('./passport-config');         // sets up LocalStrategy + (de)serialize
 const storage = require('./storage');
 const imageController = require('./controllers/Image');
-
-
 const serverPort = 3001;
+const mqtt = require('mqtt');
+const mqttClient = mqtt.connect('mqtt://127.0.0.1:1883');
+
+mqttClient.on('connect', async () => {
+  console.log('MQTT connected to mqtt://127.0.0.1:1883');
+
+  try {
+    const rows = await storage.listAllPublicFilmsSelectionStatus();
+    rows.forEach(r => {
+      const topic = String(r.filmId);
+      const msg = (r.userId)
+        ? { status: 'active', userId: r.userId, userName: r.userName }
+        : { status: 'inactive' };
+
+      mqttClient.publish(topic, JSON.stringify(msg), { retain: true });
+    });
+  } catch (err) {
+    console.error('Error publishing initial film statuses', err);
+  }
+});
+
+mqttClient.on('error', (err) => {
+  console.error('MQTT error', err);
+});
+
+// helper – we’ll reuse it
+function publishFilmStatus(filmId, payload) {
+  mqttClient.publish(String(filmId), JSON.stringify(payload), { retain: true });
+}
+
 
 /* ---------------------------- Swagger bootstrap ---------------------------- */
 const expressAppConfig = oas3Tools.expressAppConfig(path.join(__dirname, 'api/openapi.yaml'));
 const app = expressAppConfig.getApp();
-
-
 
 
 
@@ -144,7 +169,7 @@ const filmUpdateSchema = {
   allOf: [
     {
       if: { properties: { private: { const: true } }, required: ['private'] },
-      then: {}, // extras allowed
+      then: {},
       else: {
         not: {
           anyOf: [
@@ -274,50 +299,79 @@ app.delete(
 );
 
 /** FILM SELECTION (AUTH REQUIRED) */
+// User selects an active film
 app.put('/api/users/:userId/selection', isLoggedIn, async (req, res) => {
   try {
     const userId = parseInt(req.params.userId);
-    if (userId !== req.user.id)
+
+    // Only the logged-in user can update their own selection
+    if (userId !== req.user.id) {
       return res.status(403).json({ error: 'USER_NOT_AUTHORIZED' });
+    }
 
     const { filmId } = req.body;
-    if (!filmId)
+    if (!filmId) {
       return res.status(400).json({ error: 'NO_FILMID_PROVIDED' });
+    }
 
-    // 1) Check permission using reviews + public film
+    // 1) Check the user has a review invitation for this film
     const allowed = await storage.checkUserReviewPermission(userId, filmId);
-    if (!allowed)
+    if (!allowed) {
       return res.status(403).json({ error: 'NO_REVIEW_REQUEST_FOR_USER' });
+    }
 
-    // 2) Update DB active film (clear previous, set new)
-    await storage.setActiveFilm(userId, filmId);
+    // 2) Try to set this film as active for this user
+    const ok = await storage.setActiveFilm(userId, filmId);
+    if (!ok) {
+      // film already active for another user
+      return res.status(409).json({ error: 'FILM_ALREADY_ACTIVE_FOR_OTHER_USER' });
+    }
 
-    // 3) Get title for broadcast
+    // 3) Get film title (for WebSocket + MQTT)
     const film = await storage.getFilmById(filmId);
-    if (!film)
-      return res.status(404).json({ error: 'FILM_NOT_FOUND' });
 
-    // 4) Respond to caller
+    // --- HTTP response ---
     res.status(200).json({
       userId,
       filmId,
       filmTitle: film.title,
     });
 
-    // 5) Notify all WS clients (this will also update onlineUsers map)
-    global.wssBroadcast({
+    // --- WebSocket broadcast (online list: who is working on what) ---
+    const wsMsg = {
       typeMessage: 'update',
       userId,
       userName: req.user.name,
       filmId,
       filmTitle: film.title,
-    });
+    };
+    if (global.wssBroadcast) {
+      global.wssBroadcast(wsMsg);
+    }
+
+    // --- MQTT publish: this film is now active for this user ---
+    const mqttMsg = {
+      status: 'active',
+      userId,
+      userName: req.user.name,
+    };
+    if (global.mqttClient) {
+      global.mqttClient.publish(
+        String(filmId),
+        JSON.stringify(mqttMsg),
+        { retain: true },
+        (err) => {
+          if (err) console.error('Error publishing film active MQTT msg', err);
+        }
+      );
+    }
 
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'SERVER_ERROR' });
   }
 });
+
 
 /** OPTIONAL ADMIN */
 app.post('/api/reviews/auto-assign', isLoggedIn, (req, res, next) =>

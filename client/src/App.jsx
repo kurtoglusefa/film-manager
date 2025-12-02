@@ -6,27 +6,67 @@ import React, { useState, useEffect, useContext, useRef } from 'react';
 import { Container, Toast } from 'react-bootstrap/';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 
-import { PrivateLayout, PublicLayout, PublicToReviewLayout, ReviewLayout, AddPrivateLayout, EditPrivateLayout, AddPublicLayout, EditPublicLayout, EditReviewLayout, IssueLayout, DefaultLayout, NotFoundLayout, LoginLayout, LoadingLayout, OnlineLayout } from './components/PageLayout';
+import {
+  PrivateLayout,
+  PublicLayout,
+  PublicToReviewLayout,
+  ReviewLayout,
+  AddPrivateLayout,
+  EditPrivateLayout,
+  AddPublicLayout,
+  EditPublicLayout,
+  EditReviewLayout,
+  IssueLayout,
+  DefaultLayout,
+  NotFoundLayout,
+  LoginLayout,
+  LoadingLayout,
+  OnlineLayout
+} from './components/PageLayout';
 import { Navigation } from './components/Navigation';
 
 import MessageContext from './messageCtx';
 import API from './API';
 
 
-// HINT: URL for WebSocket connection
+// MQTT
+import mqtt from 'mqtt';
+// WebSocket URL
+const WS_URL = 'ws://localhost:5000';
+const mqttHost = 'ws://127.0.0.1:8080';   // Mosquitto WebSocket listener
 
-const url = 'ws://localhost:5000'
+
+
+// MQTT options and client
+const mqttOptions = {
+  keepalive: 30,
+  clientId: 'mqttjs_' + Math.random().toString(16).substr(2, 8),
+  clean: true,
+  reconnectPeriod: 1000,
+  connectTimeout: 30 * 1000,
+  will: {
+    topic: 'WillMsg',
+    payload: 'Connection Closed abnormally..!',
+    qos: 0,
+    retain: false,
+  },
+  rejectUnauthorized: false,
+};
+// Create ONE shared client for the whole app
+const mqttClient = mqtt.connect(mqttHost, mqttOptions);
+
+
+
 function App() {
-
   const [message, setMessage] = useState('');
-  // If an error occurs, the error message will be shown in a toast.
+
   const handleErrors = (err) => {
     let msg = '';
-    if (err.error) msg = err.error;
-    else if (typeof (err) === "string") msg = String(err);
-    else msg = "Error";
-    setMessage(msg); // WARN: a more complex application requires a queue of messages. In this example only last error is shown.
-  }
+    if (err?.error) msg = err.error;
+    else if (typeof err === 'string') msg = String(err);
+    else msg = 'Error';
+    setMessage(msg);
+  };
 
   return (
     <BrowserRouter>
@@ -35,56 +75,53 @@ function App() {
           <Routes>
             <Route path="/*" element={<Main />} />
           </Routes>
-          <Toast show={message !== ''} onClose={() => setMessage('')} delay={4000} autohide>
+          <Toast
+            show={message !== ''}
+            onClose={() => setMessage('')}
+            delay={4000}
+            autohide
+          >
             <Toast.Body>{message}</Toast.Body>
           </Toast>
         </Container>
       </MessageContext.Provider>
     </BrowserRouter>
-  )
+  );
 }
 
 function Main() {
-
-  // This state is used for displaying a LoadingLayout while we are waiting an answer from the server.
   const [loading, setLoading] = useState(true);
-  // This state keeps track if the user is currently logged-in.
   const [loggedIn, setLoggedIn] = useState(false);
-  // This state contains the user's info.
   const [user, setUser] = useState(null);
-  // This state contains the possible selectable filters.
   const [filters, setFilters] = useState({});
 
-  /*****************************************************************
-  * HINT: use this state to update the online list REACT component *
-  ******************************************************************/
   const [onlineList, setOnlineList] = useState([]);
-  //This state contains the Film Manager resource.
+  const [filmSelections, setFilmSelections] = useState([]);      // [{filmId, userName, status}]
+  const [subscribedTopics, setSubscribedTopics] = useState([]);  // ['2','3',...]
   const [filmManager, setFilmManager] = useState({});
 
-  // Error messages are managed at context level (like global variables)
   const { handleErrors } = useContext(MessageContext);
-
   const location = useLocation();
+  const socket = useRef(null);
 
-  let socket = useRef(null);
-
-  //Film manager resource retrieval
+  // Load Film Manager resource
   useEffect(() => {
-    API.getFilmManager().then(fm => { setFilmManager(fm); sessionStorage.setItem('filmManager', JSON.stringify(fm)); console.log(JSON.parse(sessionStorage.getItem('filmManager'))) });
-  },
-    []);
+    API.getFilmManager()
+      .then((fm) => {
+        setFilmManager(fm);
+        sessionStorage.setItem('filmManager', JSON.stringify(fm));
+        console.log('FilmManager:', fm);
+      })
+      .catch(handleErrors);
+  }, []);
 
-  //WebSocket management
+  // WebSocket + MQTT wiring
   useEffect(() => {
-
-    /***********************************************************************************
-    * HINT: code for WebSocket connection and message handling should be placed here.! *
-    ************************************************************************************/
-    console.log('Attempting initialization', new Date().toString());
-    const ws = new WebSocket(url);
+    console.log('Initializing WebSocket at', new Date().toString());
+    const ws = new WebSocket(WS_URL);
     socket.current = ws;
 
+    // --- WebSocket handlers ---
     ws.onopen = () => {
       console.log('WebSocket connected');
 
@@ -92,43 +129,48 @@ function Main() {
       const storedUser = sessionStorage.getItem('user');
       if (storedUser) {
         const u = JSON.parse(storedUser);
-        ws.send(JSON.stringify({
-          typeMessage: 'login',
-          userId: u.id,
-          userName: u.name,
-          filmId: null,
-          filmTitle: null,
-        }));
+        ws.send(
+          JSON.stringify({
+            typeMessage: 'login',
+            userId: u.id,
+            userName: u.name,
+            filmId: null,
+            filmTitle: null,
+          })
+        );
       }
     };
 
     ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
+      try {
+        const data = JSON.parse(event.data);
 
-      // first message after connection is an ARRAY with all current users
-      if (Array.isArray(data)) {
-        setOnlineList(data);
-        return;
-      }
-
-      const msg = data;
-
-      setOnlineList((prev) => {
-        const current = [...prev];
-        const idx = current.findIndex((m) => m.userId === msg.userId);
-
-        if (msg.typeMessage === 'login') {
-          if (idx === -1) current.push(msg);
-          else current[idx] = msg;
-        } else if (msg.typeMessage === 'update') {
-          if (idx === -1) current.push(msg);
-          else current[idx] = { ...current[idx], ...msg };
-        } else if (msg.typeMessage === 'logout') {
-          if (idx !== -1) current.splice(idx, 1);
+        // if server ever sends initial array of online users
+        if (Array.isArray(data)) {
+          setOnlineList(data);
+          return;
         }
 
-        return current;
-      });
+        const msg = data;
+        setOnlineList((prev) => {
+          const current = [...prev];
+          const idx = current.findIndex((m) => m.userId === msg.userId);
+
+          if (msg.typeMessage === 'login') {
+            if (idx === -1) current.push(msg);
+            else current[idx] = msg;
+          } else if (msg.typeMessage === 'update') {
+            if (idx === -1) current.push(msg);
+            else current[idx] = { ...current[idx], ...msg };
+          } else if (msg.typeMessage === 'logout') {
+            if (idx !== -1) current.splice(idx, 1);
+          }
+
+          return current;
+        });
+      } catch (err) {
+        console.error('WebSocket message error', err);
+      }
     };
 
     ws.onerror = (err) => {
@@ -139,110 +181,122 @@ function Main() {
       console.log('WebSocket closed');
     };
 
-    return () => {
-      ws.close();
+    // --- MQTT handlers ---
+    const handleMqttMessage = (topic, message) => {
+      try {
+        const parsed = JSON.parse(message.toString());
+        const filmId = Number(topic);
+
+        setFilmSelections((currentArray) => {
+          const newArray = [...currentArray];
+          const idx = newArray.findIndex((x) => x.filmId === filmId);
+
+          const objectStatus = {
+            filmId,
+            userName: parsed.userName || null,
+            status: parsed.status, // 'active' | 'inactive' | 'deleted'
+          };
+
+          if (idx === -1) newArray.push(objectStatus);
+          else newArray[idx] = objectStatus;
+
+          return newArray;
+        });
+      } catch (err) {
+        console.error('Bad MQTT message', err);
+      }
     };
 
+    mqttClient.on('connect', () => {
+      console.log('MQTT connected in React');
+    });
 
+    mqttClient.on('error', (err) => {
+      console.error('MQTT error in React', err);
+    });
+
+    mqttClient.on('message', handleMqttMessage);
+
+    // Cleanup
+    return () => {
+      ws.close();
+      mqttClient.removeListener('message', handleMqttMessage);
+    };
   }, []);
 
+  // Initial auth + filters
   useEffect(() => {
     const init = async () => {
       setLoading(true);
 
-      // Define filters 
-      const filters = ['private', 'public', 'public/to_review', 'online'];
-      setFilters(filters);
+      const f = ['private', 'public', 'public/to_review', 'online'];
+      setFilters(f);
 
-      if (sessionStorage.getItem('user') != undefined) {
-        setUser(sessionStorage.getItem('user'));
+      const storedUser = sessionStorage.getItem('user');
+      if (storedUser) {
+        const parsed = JSON.parse(storedUser);
+        setUser(parsed);
         setLoggedIn(true);
-        setLoading(false);
       } else {
         setUser(null);
         setLoggedIn(false);
-        setLoading(false);
       }
+      setLoading(false);
     };
     init();
-  }, []);  // This useEffect is called only the first time the component is mounted.
+  }, []);
 
-  /**
-   * This function handles the login process.
-   * It requires a email and a password inside a "credentials" object.
-   */
-  // const handleLogin = async (filmManager, credentials) => {
-  //   try {
-  //     const user = await API.logIn(filmManager, credentials);
-  //     sessionStorage.setItem('user', JSON.stringify(user))
-  //     sessionStorage.setItem('userId', user.id);
-  //     sessionStorage.setItem('username', user.name);
-  //     sessionStorage.setItem('email', user.email);
-  //     setUser(user);
-  //     setLoggedIn(true);
-  //   } catch (err) {
-  //     // error is handled and visualized in the login form, do not manage error, throw it
-  //     throw err;
-  //   }
-  // };
-  const handleLogin = async (filmManager, credentials) => {
+  // Login
+  const handleLogin = async (filmManagerResource, credentials) => {
     try {
-      const user = await API.logIn(filmManager, credentials);
-      sessionStorage.setItem('user', JSON.stringify(user))
-      sessionStorage.setItem('userId', user.id);
-      sessionStorage.setItem('username', user.name);
-      sessionStorage.setItem('email', user.email);
-      setUser(user);
+      const loggedUser = await API.logIn(filmManagerResource, credentials);
+      sessionStorage.setItem('user', JSON.stringify(loggedUser));
+      sessionStorage.setItem('userId', loggedUser.id);
+      sessionStorage.setItem('username', loggedUser.name);
+      sessionStorage.setItem('email', loggedUser.email);
+
+      setUser(loggedUser);
       setLoggedIn(true);
 
       // notify through WebSocket
       if (socket.current && socket.current.readyState === WebSocket.OPEN) {
-        socket.current.send(JSON.stringify({
-          typeMessage: 'login',
-          userId: user.id,
-          userName: user.name,
-          filmId: null,
-          filmTitle: null,
-        }));
+        socket.current.send(
+          JSON.stringify({
+            typeMessage: 'login',
+            userId: loggedUser.id,
+            userName: loggedUser.name,
+            filmId: null,
+            filmTitle: null,
+          })
+        );
       }
     } catch (err) {
-      // error is handled and visualized in the login form, do not manage error, throw it
       throw err;
     }
   };
 
-
-  /**
-   * This function handles the logout process.
-   */
-  // const handleLogout = async (filmManager) => {
-  //   await API.logOut(filmManager);
-
-  //   setLoggedIn(false);
-  //   setUser(null);
-  //   sessionStorage.removeItem('user');
-  //   sessionStorage.removeItem('userId');
-  //   sessionStorage.removeItem('username');
-  //   sessionStorage.removeItem('email');
-  // };
-  const handleLogout = async (filmManager) => {
+  // Logout
+  const handleLogout = async (filmManagerResource) => {
     const storedUser = sessionStorage.getItem('user');
-    let userId = null, userName = null;
+    let userId = null,
+      userName = null;
     if (storedUser) {
       const u = JSON.parse(storedUser);
       userId = u.id;
       userName = u.name;
     }
 
-    await API.logOut(filmManager);
+    await API.logOut(filmManagerResource);
 
     // notify through WebSocket
     if (socket.current && socket.current.readyState === WebSocket.OPEN && userId) {
-      socket.current.send(JSON.stringify({
-        typeMessage: 'logout',
-        userId,
-        userName,
-      }));
+      socket.current.send(
+        JSON.stringify({
+          typeMessage: 'logout',
+          userId,
+          userName,
+        })
+      );
     }
 
     setLoggedIn(false);
@@ -253,55 +307,122 @@ function Main() {
     sessionStorage.removeItem('email');
   };
 
-  const handleSelectFilm = async (film, user) => {
+  // Selection of a film (REST + WS update)
+  const handleSelectFilm = async (film, currentUser) => {
     try {
-      // 1) Update selection on the REST backend
-      await API.selectFilm(film, user);
+      await API.selectFilm(film, currentUser);
 
-      // 2) Notify everyone via WebSocket (typeMessage: "update")
       if (socket.current && socket.current.readyState === WebSocket.OPEN) {
-        const userId = user.userId ?? user.id;
-        const userName = user.userName ?? user.name;
+        const userId = currentUser.userId ?? currentUser.id;
+        const userName = currentUser.userName ?? currentUser.name;
 
-        socket.current.send(JSON.stringify({
-          typeMessage: 'update',
-          userId,
-          userName,
-          filmId: film.id,
-          filmTitle: film.title,   // name of the selected film
-        }));
+        socket.current.send(
+          JSON.stringify({
+            typeMessage: 'update',
+            userId,
+            userName,
+            filmId: film.id,
+            filmTitle: film.title,
+          })
+        );
       }
     } catch (err) {
       handleErrors(err);
     }
   };
 
+  const filmManagerFromSession =
+    sessionStorage.getItem('filmManager') &&
+    JSON.parse(sessionStorage.getItem('filmManager'));
+
+  const userFromSession =
+    sessionStorage.getItem('user') &&
+    JSON.parse(sessionStorage.getItem('user'));
+
   return (
     <>
-      <Navigation logout={handleLogout} user={user} loggedIn={loggedIn} filmManager={JSON.parse(sessionStorage.getItem('filmManager'))} />
+      <Navigation
+        logout={handleLogout}
+        user={user}
+        loggedIn={loggedIn}
+        filmManager={filmManagerFromSession}
+      />
 
       <Routes>
-        <Route path="/" element={
-          loading ? <LoadingLayout />
-            : loggedIn ? <DefaultLayout filters={filters} onlineList={onlineList} />
-              : <Navigate to="/login" replace state={location} />
-        } >
-          <Route index element={<PrivateLayout filmManager={JSON.parse(sessionStorage.getItem('filmManager'))} />} />
-          <Route path="private" element={<PrivateLayout filmManager={JSON.parse(sessionStorage.getItem('filmManager'))} />} />
-          <Route path="private/add" element={<AddPrivateLayout filmManager={JSON.parse(sessionStorage.getItem('filmManager'))} />} />
+        <Route
+          path="/"
+          element={
+            loading ? (
+              <LoadingLayout />
+            ) : loggedIn ? (
+              <DefaultLayout filters={filters} onlineList={onlineList} />
+            ) : (
+              <Navigate to="/login" replace state={location} />
+            )
+          }
+        >
+          <Route
+            index
+            element={<PrivateLayout filmManager={filmManagerFromSession} />}
+          />
+          <Route
+            path="private"
+            element={<PrivateLayout filmManager={filmManagerFromSession} />}
+          />
+          <Route
+            path="private/add"
+            element={<AddPrivateLayout filmManager={filmManagerFromSession} />}
+          />
           <Route path="private/edit/:filmId" element={<EditPrivateLayout />} />
-          <Route path="public" element={<PublicLayout filmManager={JSON.parse(sessionStorage.getItem('filmManager'))} />} />
-          <Route path="public/add" element={<AddPublicLayout filmManager={JSON.parse(sessionStorage.getItem('filmManager'))} />} />
+
+          <Route
+            path="public"
+            element={<PublicLayout filmManager={filmManagerFromSession} />}
+          />
+          <Route
+            path="public/add"
+            element={<AddPublicLayout filmManager={filmManagerFromSession} />}
+          />
           <Route path="public/edit/:filmId" element={<EditPublicLayout />} />
           <Route path="public/:filmId/reviews" element={<ReviewLayout />} />
-          <Route path="public/:filmId/reviews/complete" element={<EditReviewLayout />} />
-          <Route path="public/:filmId/issue" element={<IssueLayout filmManager={JSON.parse(sessionStorage.getItem('filmManager'))} />} />
-          <Route path="public/to_review" element={<PublicToReviewLayout onlineList={onlineList} filmManager={JSON.parse(sessionStorage.getItem('filmManager'))} user={JSON.parse(sessionStorage.getItem('user'))} onSelectFilm={handleSelectFilm}/>} />
+          <Route
+            path="public/:filmId/reviews/complete"
+            element={<EditReviewLayout />}
+          />
+          <Route
+            path="public/:filmId/issue"
+            element={<IssueLayout filmManager={filmManagerFromSession} />}
+          />
+
+          <Route
+            path="public/to_review"
+            element={
+              <PublicToReviewLayout
+                onlineList={onlineList}
+                filmManager={filmManagerFromSession}
+                user={userFromSession}
+                onSelectFilm={handleSelectFilm}
+                filmSelections={filmSelections}
+                mqttClient={mqttClient}
+                subscribedTopics={subscribedTopics}
+                setSubscribedTopics={setSubscribedTopics}
+              />
+            }
+          />
+
           <Route path="online" element={<OnlineLayout onlineList={onlineList} />} />
           <Route path="*" element={<NotFoundLayout />} />
         </Route>
 
-        <Route path="/login" element={<LoginLayout login={handleLogin} filmManager={JSON.parse(sessionStorage.getItem('filmManager'))} />} />
+        <Route
+          path="/login"
+          element={
+            <LoginLayout
+              login={handleLogin}
+              filmManager={filmManagerFromSession}
+            />
+          }
+        />
       </Routes>
     </>
   );
